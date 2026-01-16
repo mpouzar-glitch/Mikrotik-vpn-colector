@@ -558,6 +558,14 @@ https://yourdomain.com/vpn/report.php?date=2026-01-16&format=csv
 https://yourdomain.com/vpn/report.php?date=2026-01-16&format=json
 ```
 
+## 🖼️ Screenshots
+
+Daily, weekly, and monthly report views:
+
+![Daily report view](docs/report_01.jpg)
+![Weekly report view](docs/report_02.jpg)
+![Monthly report view](docs/report_03.jpg)
+
 ## 🔍 How It Works
 
 1. **User connects** to VPN → MikroTik executes On-Up script (logs connection, adds to address-list)
