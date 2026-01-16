@@ -1,0 +1,20 @@
+# PPP On-Up Script - with AAA accounting
+:local username $user
+:local remoteIP $"remote-address"
+:local callerID $"caller-id"
+:local interfaceName $interface
+
+:log info "VPN-CONNECT: User=$username IP=$remoteIP CallerID=$callerID Interface=$interfaceName"
+
+# AAA accounting automatically stores connect info, no need for global variables
+# We can optionally add to address-list for monitoring
+
+/ip firewall address-list remove [find list="vpn-active-users" address=$remoteIP]
+/ip firewall address-list add \
+    list="vpn-active-users" \
+    address=$remoteIP \
+    comment="VPN-$username" \
+    timeout=24h
+
+:log info "VPN-CONNECT-COMPLETE: $username ready"
+

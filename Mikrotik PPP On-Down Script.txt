@@ -1,0 +1,155 @@
+# PPP On-Down Script - calculated connect time
+:local u $user
+:local dT [/system clock get time]
+:local dD [/system clock get date]
+
+:log info "=== VPN-DISCONNECT: $u ==="
+
+# Convert date from jan/16/2026 to 2026-01-16
+:local dSQL $dD
+:local p1 [:find $dD "/"]
+:if ([:typeof $p1] = "num") do={
+    :local monthStr [:pick $dD 0 $p1]
+    :local rest [:pick $dD ($p1+1) [:len $dD]]
+    :local p2 [:find $rest "/"]
+    
+    :if ([:typeof $p2] = "num") do={
+        :local dayStr [:pick $rest 0 $p2]
+        :local yearStr [:pick $rest ($p2+1) [:len $rest]]
+        :if ([:len $dayStr] = 1) do={:set dayStr "0$dayStr"}
+        
+        :local monthNum "01"
+        :if ($monthStr = "jan") do={:set monthNum "01"}
+        :if ($monthStr = "feb") do={:set monthNum "02"}
+        :if ($monthStr = "mar") do={:set monthNum "03"}
+        :if ($monthStr = "apr") do={:set monthNum "04"}
+        :if ($monthStr = "may") do={:set monthNum "05"}
+        :if ($monthStr = "jun") do={:set monthNum "06"}
+        :if ($monthStr = "jul") do={:set monthNum "07"}
+        :if ($monthStr = "aug") do={:set monthNum "08"}
+        :if ($monthStr = "sep") do={:set monthNum "09"}
+        :if ($monthStr = "oct") do={:set monthNum "10"}
+        :if ($monthStr = "nov") do={:set monthNum "11"}
+        :if ($monthStr = "dec") do={:set monthNum "12"}
+        
+        :set dSQL "$yearStr-$monthNum-$dayStr"
+    }
+}
+
+# Parse PPP accounting log
+:delay 1s
+:local caller "N/A"
+:local sT 0
+:local rxB 0
+:local txB 0
+:local rxP 0
+:local txP 0
+
+:foreach le in=[/log find message~"$u logged out"] do={
+    :local msg [/log get $le message]
+    :local cp [:find $msg ", "]
+    
+    :if ([:typeof $cp] = "num") do={
+        :local after [:pick $msg ($cp+2) [:len $msg]]
+        :local nums [:toarray ""]
+        :local curr ""
+        
+        # Extract numbers from "sessionTime rxBytes txBytes rxPackets txPackets"
+        :for i from=0 to=([:len $after]-1) do={
+            :local c [:pick $after $i ($i+1)]
+            :if ($c="0"||$c="1"||$c="2"||$c="3"||$c="4"||$c="5"||$c="6"||$c="7"||$c="8"||$c="9") do={
+                :set curr "$curr$c"
+            } else={
+                :if ([:len $curr] > 0) do={
+                    :set nums ($nums,$curr)
+                    :set curr ""
+                    :if ([:len $nums] >= 5) do={:set i [:len $after]}
+                }
+            }
+        }
+        
+        :if ([:len $nums] >= 5) do={
+            :set sT [:tonum ($nums->0)]
+            :set rxB [:tonum ($nums->1)]
+            :set txB [:tonum ($nums->2)]
+            :set rxP [:tonum ($nums->3)]
+            :set txP [:tonum ($nums->4)]
+        }
+        
+        # Extract caller IP from "from X.X.X.X"
+        :local fp [:find $msg " from "]
+        :if ([:typeof $fp] = "num") do={
+            :set caller [:pick $msg ($fp+6) [:len $msg]]
+            :local sp [:find $caller " "]
+            :if ([:typeof $sp] = "num") do={:set caller [:pick $caller 0 $sp]}
+        }
+    }
+}
+
+# Convert bytes to MB
+:local rxMB ($rxB / 1048576)
+:local txMB ($txB / 1048576)
+
+# ==========================================
+# CALCULATE CONNECT TIME from disconnect - session
+# ==========================================
+:local cT $dT
+:local cD $dSQL
+
+:if ($sT > 0) do={
+    # Parse disconnect time HH:MM:SS
+    :local p1 [:find $dT ":"]
+    :local p2 [:find $dT ":" ($p1+1)]
+    
+    :if ([:typeof $p1] = "num" && [:typeof $p2] = "num") do={
+        :local hh [:tonum [:pick $dT 0 $p1]]
+        :local mm [:tonum [:pick $dT ($p1+1) $p2]]
+        :local ss [:tonum [:pick $dT ($p2+1) [:len $dT]]]
+        
+        # Convert to total seconds
+        :local totalSec (($hh * 3600) + ($mm * 60) + $ss)
+        
+        # Subtract session time
+        :local connectSec ($totalSec - $sT)
+        
+        # Handle negative (crossed midnight or previous day)
+        :if ($connectSec < 0) do={
+            :set connectSec ($connectSec + 86400)
+            # Should also subtract 1 day from date, but simplified for now
+        }
+        
+        # Convert back to HH:MM:SS
+        :local cHH ($connectSec / 3600)
+        :local cMM (($connectSec % 3600) / 60)
+        :local cSS ($connectSec % 60)
+        
+        # Format with leading zeros
+        :local cHHstr "$cHH"
+        :local cMMstr "$cMM"
+        :local cSSstr "$cSS"
+        
+        :if ($cHH < 10) do={:set cHHstr "0$cHH"}
+        :if ($cMM < 10) do={:set cMMstr "0$cMM"}
+        :if ($cSS < 10) do={:set cSSstr "0$cSS"}
+        
+        :set cT "$cHHstr:$cMMstr:$cSSstr"
+        
+        :log info "Calculated connect time: $cT (disconnect $dT - $sT sec)"
+    }
+}
+
+# Build CSV: VPN_DISCONNECT,user,connectDate,connectTime,disconnectDate,disconnectTime,txMB,rxMB,...
+:local csv "VPN_DISCONNECT,$u,$cD,$cT,$dSQL,$dT,$txMB,$rxMB,0,$txP,$rxP,0,0,$caller,N/A,0,0,0,0,$sT"
+
+:log info "CSV: $csv"
+
+# Send email with statistics
+:do {
+    /tool e-mail send to="user@example.com" subject="VPN-STATS-$u" body=$csv
+    :log info "Email sent"
+} on-error={
+    :log error "Email failed"
+}
+
+:log info "=== VPN-COMPLETE ==="
+
